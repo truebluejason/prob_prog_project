@@ -12,11 +12,15 @@ def multiply(a,b):
 def divide(a,b):
     return torch.divide(a,b)
 def gt(a,b):
-    return a>b
+    return torch.Tensor([a>b])
 def lt(a,b):
-    return a<b
+    return torch.Tensor([a<b])
 def eq(a,b):
-    return a==b
+    return torch.Tensor([a==b])
+def compare_and(a,b):
+    return torch.Tensor([a and b])
+def compare_or(a,b):
+    return torch.Tensor([a or b])
 def sqrt(a):
     return torch.sqrt(a)
 def tanh(a):
@@ -75,7 +79,7 @@ def put(struct, index, value):
 def bernoulli(p, obs=None):
     return torch.distributions.Bernoulli(p)
 def beta(alpha, beta, obs=None):
-    return torch.distributions.Beta(alpha,beta)
+    return torch.distributions.Beta(alpha, beta)
 def normal(mu, sigma):
     return torch.distributions.Normal(mu, sigma)
 def uniform(a, b):
@@ -84,6 +88,21 @@ def exponential(lamb):
     return torch.distributions.Exponential(lamb)
 def discrete(vector):
     return torch.distributions.Categorical(vector)
+def gamma(concentration, rate):
+    return torch.distributions.gamma.Gamma(concentration, rate)
+def dirichlet(concentration):
+    return torch.distributions.dirichlet.Dirichlet(concentration)
+def dirac(point):
+    class Dirac:
+        def __init__(self, point):
+            self.point = point
+        def sample(self):
+            return self.point
+        def log_prob(self, obs):
+            return torch.distributions.normal.Normal(self.point,1e-3).log_prob(obs)
+            value = 0. if obs == self.point else -float('inf')
+            return torch.Tensor([value]).squeeze()
+    return Dirac(point)
 def transpose(tensor):
     return tensor.T
 def repmat(tensor, size1, size2):
@@ -100,7 +119,7 @@ PRIMITIVES = {
     "/": divide,
     ">": gt,
     "<": lt,
-    "==": eq,
+    "=": eq,
     "sqrt": sqrt,
     "first": first,
     "second": second,
@@ -108,6 +127,8 @@ PRIMITIVES = {
     "last": last,
     "nth": nth,
     "append": conj,
+    "and": compare_and,
+    "or": compare_or,
     "conj": conj,
     "cons": cons,
     "vector": vector,
@@ -115,12 +136,15 @@ PRIMITIVES = {
     "list": list,
     "get": get,
     "put": put,
-    "bernoulli": bernoulli,
+    "flip": bernoulli,
     "beta": beta,
     "normal": normal,
     "uniform": uniform,
     "exponential": exponential,
     "discrete": discrete,
+    "gamma": gamma,
+    "dirichlet": dirichlet,
+    "dirac": dirac,
     "mat-transpose": transpose,
     "mat-add": add,
     "mat-tanh": tanh,

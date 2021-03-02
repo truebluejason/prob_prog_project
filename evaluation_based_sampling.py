@@ -1,7 +1,9 @@
 from daphne import daphne
+from utils import *
 from tests import is_tol, run_prob_test,load_truth
 import matplotlib.pyplot as plt
 import seaborn as sns
+import time
 import torch
 import numpy as np
 from primitives import PRIMITIVES
@@ -22,7 +24,7 @@ def evaluate_program(ast):
 
     def eval(expr, sigma, scope):
         if is_const(expr, scope):
-            if type(expr) in [int, float]:
+            if type(expr) in [int, float, bool]:
                 expr = torch.Tensor([expr]).squeeze()
             return expr, sigma
         elif is_var(expr, scope):
@@ -41,11 +43,14 @@ def evaluate_program(ast):
         elif is_sample(expr,scope):
             dist_expr = expr[1]
             dist_obj, sigma = eval(dist_expr,sigma,scope)
+            # return sample from distribution object
             return dist_obj.sample(), sigma
         elif is_observe(expr,scope):
             dist_expr, obs_expr = expr[1], expr[2]
             dist_obj, sigma = eval(dist_expr,sigma,scope)
             obs_value, sigma = eval(obs_expr,sigma,scope)
+            # update trace total likelihood for importance sampling
+            sigma['log_W'] = sigma['log_W'] + dist_obj.log_prob(obs_value)
             return obs_value, sigma
         else:
             proc_name = expr[0]
@@ -61,8 +66,7 @@ def evaluate_program(ast):
                 return eval(proc_expr, sigma, new_scope)
             else:
                 return PRIMITIVES[proc_name](*consts), sigma
-
-    return eval(ast[-1], {}, {})
+    return eval(ast[-1], {'log_W': 0.}, {})
 
 
 def is_const(expr, scope):
@@ -83,7 +87,16 @@ def get_stream(ast):
     """Return a stream of prior samples"""
     while True:
         yield evaluate_program(ast)
-    
+
+
+def importance_sampling(ast, num_samples=10):
+    traces, weights = [], []
+    stream = get_stream(ast)
+    for i in range(num_samples):
+        sample, sigma = next(stream)
+        traces.append(sample)
+        weights.append(sigma['log_W'])
+    return traces, weights
 
 
 def run_deterministic_tests():
@@ -110,7 +123,7 @@ def run_probabilistic_tests():
     num_samples=1e4
     max_p_value = 1e-4
     
-    for i in range(1,7):
+    for i in range(1,6):
         #note: this path should be with respect to the daphne path!        
         ast = daphne(['desugar', '-i', '../CS532-HW2/programs/tests/probabilistic/test_{}.daphne'.format(i)])
         truth = load_truth('programs/tests/probabilistic/test_{}.truth'.format(i))
@@ -131,12 +144,26 @@ def print_tensor(tensor):
 
         
 if __name__ == '__main__':
-    run_deterministic_tests()
-    run_probabilistic_tests()
-
-    for i in range(1,5):
+    #run_deterministic_tests()
+    #run_probabilistic_tests()
+    
+    for i in [1,2,3,4,5]:
         ast = daphne(['desugar', '-i', '../CS532-HW2/programs/{}.daphne'.format(i)])
-
+        start_time = time.time()
+        traces, weights = importance_sampling(ast, num_samples=50000)
+        end_time   = time.time()
+        print(f"==============================")
+        print(f"PROGRAM {i} RUNTIME: {end_time-start_time}")
+        print(f"==============================")
+        means = compute_mean(traces, weights)
+        for j, mean in enumerate(means):
+            print(f"Posterior mean at site {j}: {mean}")
+        if i == 2: print(f"Posterior covariance: {compute_covariance(traces, weights)}")
+        variances = compute_variance(traces, weights)
+        for j, variance in enumerate(variances): 
+            print(f"Posterior variance at site {j}: {variance}")
+        plot_posterior(f'p{i}is', traces, weights)
+    """
         samples, n = [], 1000
         for j in range(n):
             sample = evaluate_program(ast)[0]
@@ -156,6 +183,7 @@ if __name__ == '__main__':
         else:
             expectation = sum(samples)/n
             print_tensor(expectation)
+    """
 
 """
 Plot Code
