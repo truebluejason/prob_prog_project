@@ -1,7 +1,10 @@
+import os
 import time
 import torch
 import torch.distributions as distributions
 from torch.distributions import Uniform, Normal
+import distributions as dists
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
 from copy import deepcopy
@@ -13,6 +16,8 @@ from primitives import PRIMITIVES
 from tests import is_tol, run_prob_test,load_truth
 from utils import *
 
+
+torch.manual_seed(0)
 
 def deterministic_eval(exp):
     "Evaluation function for the deterministic target language of the graph based representation."
@@ -57,7 +62,7 @@ def compute_log_joint(sorted_nodes, links, trace_dict):
     for node in sorted_nodes:
         link_expr = links[node][1]
         dist      = deterministic_eval(plugin_parent_values(link_expr, trace_dict))
-        joint_log_prob += dist.log_prob(trace_dict[node])
+        joint_log_prob += dist.log_prob(trace_dict[node]).detach()
     return joint_log_prob
 
 def sample_from_joint(graph):
@@ -226,10 +231,125 @@ def HMC(graph, num_samples=10, num_jumps=20, jump_dist=0.1):
     return traces, joint_log_probs
 
 
-#Testing:
+def bbvi(graph, num_samples=10, num_updates=1000, lr=0.1):
+    procs, model, expr = graph[0], graph[1], graph[2]
+    nodes, edges, links, obs = model['V'], model['A'], model['P'], model['Y']
+    sorted_nodes = topological_sort(nodes, edges)
+    sorted_unobserved_nodes = list(filter(lambda node: links[node][0] == "sample*", sorted_nodes))
+
+    def init_proposals():
+        # Return a dictionary of proposal distributions with gradients enabled and
+        # a dictionary of PyTorch optimizers
+        proposals, optimizers = {}, {}
+        trace = {}
+        for node in sorted_nodes:
+            keyword = links[node][0]
+            if keyword == "sample*":
+                link_expr        = links[node][1]
+                prior_obj        = deterministic_eval(plugin_parent_values(link_expr, trace))
+                proposal_obj     = prior_obj.make_copy_with_grads()
+                if type(prior_obj) == dists.Uniform: 
+                    proposal_obj = dists.Gamma(torch.ones(1).squeeze(),torch.ones(1).squeeze()*2).make_copy_with_grads()
+                proposals[node]  = proposal_obj
+                optimizers[node] = torch.optim.Adam(proposal_obj.Parameters(), lr=lr)
+                trace[node]      = prior_obj.sample()
+            elif keyword == "observe*":
+                trace[node]      = obs[node]
+        return proposals, optimizers
+
+    def eval(sigma):
+        trace = {}
+        for node in sorted_nodes:
+            keyword = links[node][0]
+            if keyword == "sample*":
+                link_expr            = links[node][1]
+                prior_obj            = deterministic_eval(plugin_parent_values(link_expr, trace))
+                proposal_obj         = sigma['proposals'][node]
+                sample               = proposal_obj.sample()
+                proposal_log_prob    = proposal_obj.log_prob(sample)
+                sigma['log_Q'][node] = proposal_log_prob
+                sigma['log_W']       += prior_obj.log_prob(sample).detach() - proposal_obj.log_prob(sample).detach()
+                trace[node]          = sample.detach()
+            elif keyword == "observe*":
+                link_expr            = links[node][1]
+                likelihood_obj       = deterministic_eval(plugin_parent_values(link_expr, trace))
+                sigma['log_W']       += likelihood_obj.log_prob(obs[node]).detach()
+                trace[node]          = obs[node]
+        return deterministic_eval(plugin_parent_values(expr, trace)), sigma, trace
+
+    proposals, optimizers = init_proposals()
+    performances = []
+    for t in range(1,num_updates+1):
+        log_Qs, weights, trace_dicts = [], [], []
+        for l in range(num_samples):
+            _, sigma, trace_dict = eval({'proposals': proposals, 'log_Q': {}, 'log_W': 0.})
+            log_Qs.append(sigma['log_Q'])
+            weights.append(sigma['log_W'])
+            trace_dicts.append(trace_dict)
+        
+        # compute b for each node
+        B = {}
+        for node in sorted_nodes:
+            F, G = [], []
+            if node not in sigma['proposals']: continue
+            proposal = sigma['proposals'][node]
+            for log_Q, weight in zip(log_Qs, weights):
+                if weight == -float('inf'): continue
+                if node in log_Q:
+                    objective = log_Q[node]
+                    objective.backward(retain_graph=True)
+                    F.append([param.grad.clone() * weight for param in proposal.Parameters()])
+                    G.append([param.grad.clone() for param in proposal.Parameters()])
+                    optimizers[node].zero_grad()
+                else:
+                    F.append([0. for param in proposal.Parameters()])
+                    G.append([0. for param in proposal.Parameters()])
+            numerator, denominator = 0., 0.
+            num_dim = len(F[0])
+            for d in range(num_dim):
+                local_F   = torch.stack([f[d].flatten() for f in F], dim=0)
+                local_G   = torch.stack([g[d].flatten() for g in G], dim=0)
+                inner_dim = len(local_F[0])
+                for d1 in range(inner_dim):
+                    numerator   += np.cov(local_F[:,d1], local_G[:,d1])[0,1]
+                    denominator += np.cov(local_G[:,d1])
+            if denominator == 0. or denominator != denominator: # catch nan
+                B[node] = 0.
+            else:
+                B[node] = numerator/denominator
+
+        # Mean field assumption
+        for node in sorted_nodes:
+            objective, relevant = 0., False
+            for log_Q, weight in zip(log_Qs, weights):
+                if weight == -float('inf') or weight != weight: 
+                    continue
+                if node in log_Q and (log_Q[node] == -float('inf') or log_Q[node] != log_Q[node]): 
+                    continue
+                if node in log_Q:
+                    objective += log_Q[node] * (weight - B[node])
+                    relevant  = True
+            if not relevant: 
+                continue
+            objective = - objective / len(weights)
+            objective.backward()
+            optimizer = optimizers[node]
+            optimizer.step()
+            optimizer.zero_grad()
+
+        joint_log_probs = list(map(lambda trace_dict: compute_log_joint(sorted_nodes, links, trace_dict), trace_dicts))
+        performances.append(np.mean(list(filter(lambda el: el>-float('inf'), joint_log_probs))))
+        if t % 10 == 0: print(f'Mean Joint Log Prob: {np.mean(performances[t-9:t])}')
+
+    traces, weights = [], []
+    for l in range(num_samples):
+        sample, sigma, _ = eval({'proposals': proposals, 'log_Q': {}, 'log_W': 0.})
+        if sigma['log_W'] != sigma['log_W'] or sigma['log_W'] == -float('inf'): continue
+        traces.append(sample)
+        weights.append(sigma['log_W'])
+    return traces, weights, performances, proposals
 
 def run_deterministic_tests():
-    
     for i in range(1,13):
         #note: this path should be with respect to the daphne path!
         graph = daphne(['graph','-i','../CS532-HW2/programs/tests/deterministic/test_{}.daphne'.format(i)])
@@ -239,30 +359,21 @@ def run_deterministic_tests():
             assert(is_tol(ret, truth))
         except AssertionError:
             raise AssertionError('return value {} is not equal to truth {} for graph {}'.format(ret,truth,graph))
-        
         print('Test passed')
-        
     print('All deterministic tests passed')
 
 
-
 def run_probabilistic_tests():
-    
-    #TODO: 
     num_samples = 1e4
     max_p_value = 1e-4
-    
     for i in range(1,7):
         #note: this path should be with respect to the daphne path!        
         graph = daphne(['graph', '-i', '../CS532-HW2/programs/tests/probabilistic/test_{}.daphne'.format(i)])
         truth = load_truth('programs/tests/probabilistic/test_{}.truth'.format(i))
         stream = get_stream(graph)
-        
         p_val = run_prob_test(stream, truth, num_samples)
-        
         print('p value', p_val)
         print(p_val > max_p_value)
-    
     print('All probabilistic tests passed')    
 
 
@@ -272,66 +383,69 @@ def print_tensor(tensor):
         
 
 if __name__ == '__main__':
-    
-
     #run_deterministic_tests()
     #run_probabilistic_tests()
-    for i in [1,2,3,4,5]:
-        graph = daphne(['graph','-i','../CS532-HW2/programs/{}.daphne'.format(i)])
+    if 'PROGRAM' in os.environ:
+        programs = [int(os.environ['PROGRAM'])]
+    else:
+        programs = [1,2,3,4,5]
+    lrs      = [0.1, 0.5, 0.005, 0.002, 0.1]
+    nsamples = [250, 250, 500, 50, 250]
+    nupdates = [250, 250, 250, 100, 250]
+    for i in programs:
+        graph = daphne(['graph','-i','../CS532-HW2/programs/hw4programs/{}.daphne'.format(i)])
         start_time = time.time()
-        traces, joint_log_probs = MH_within_Gibbs(graph, num_samples=10000)
+        traces, weights, performances, proposals = bbvi(graph, num_samples=nsamples[i-1], num_updates=nupdates[i-1], lr=lrs[i-1])
         end_time   = time.time()
         print(f"==============================")
         print(f"PROGRAM {i} RUNTIME: {end_time-start_time}")
         print(f"==============================")
-        means = compute_mean(traces)
+        import pdb; pdb.set_trace()
+        means = compute_mean(traces, weights)
         for j, mean in enumerate(means):
             print(f"Posterior mean at site {j}: {mean}")
-        if i == 2: print(f"Posterior covariance: {compute_covariance(traces)}")
-        variances = compute_variance(traces)
+        variances = compute_variance(traces, weights)
         for j, variance in enumerate(variances): 
             print(f"Posterior variance at site {j}: {variance}")
-        plot_posterior(f'p{i}gibbs', traces)
-        plot_sample_trace(f'p{i}gibbs_sample', traces)
-        plot_log_joint(f'p{i}gibbs_joint', joint_log_probs)
+        plot_losses(f'p{i}bbvi_loss', performances)
+        plot_posterior(f'p{i}bbvi_joint', traces, weights)
+        print(f"Proposal Distributions: {proposals}")
 
-    for i in [1,2,5]:
-        graph = daphne(['graph','-i','../CS532-HW2/programs/{}.daphne'.format(i)])
-        start_time = time.time()
-        traces, joint_log_probs = HMC(graph, num_samples=1000)
-        end_time   = time.time()
-        print(f"==============================")
-        print(f"PROGRAM {i} RUNTIME: {end_time-start_time}")
-        print(f"==============================")
+    # for i in [1,2,3,4,5]:
+    #     graph = daphne(['graph','-i','../CS532-HW2/programs/{}.daphne'.format(i)])
+    #     start_time = time.time()
+    #     traces, joint_log_probs = MH_within_Gibbs(graph, num_samples=10000)
+    #     end_time   = time.time()
+    #     print(f"==============================")
+    #     print(f"PROGRAM {i} RUNTIME: {end_time-start_time}")
+    #     print(f"==============================")
+    #     means = compute_mean(traces)
+    #     for j, mean in enumerate(means):
+    #         print(f"Posterior mean at site {j}: {mean}")
+    #     if i == 2: print(f"Posterior covariance: {compute_covariance(traces)}")
+    #     variances = compute_variance(traces)
+    #     for j, variance in enumerate(variances): 
+    #         print(f"Posterior variance at site {j}: {variance}")
+    #     plot_posterior(f'p{i}gibbs', traces)
+    #     plot_sample_trace(f'p{i}gibbs_sample', traces)
+    #     plot_log_joint(f'p{i}gibbs_joint', joint_log_probs)
 
-        means = compute_mean(traces)
-        for j, mean in enumerate(means):
-            print(f"Posterior mean at site {j}: {mean}")
-        if i == 2: print(f"Posterior covariance: {compute_covariance(traces)}")
-        variances = compute_variance(traces)
-        for j, variance in enumerate(variances): 
-            print(f"Posterior variance at site {j}: {variance}")
-        plot_posterior(f'p{i}hmc', traces)
-        plot_sample_trace(f'p{i}hmc_sample', traces)
-        plot_log_joint(f'p{i}hmc_joint', joint_log_probs)
-        # traces, joint_log_probs = MH_within_Gibbs(graph, num_samples=100)
+    # for i in [1,2,5]:
+    #     graph = daphne(['graph','-i','../CS532-HW2/programs/{}.daphne'.format(i)])
+    #     start_time = time.time()
+    #     traces, joint_log_probs = HMC(graph, num_samples=1000)
+    #     end_time   = time.time()
+    #     print(f"==============================")
+    #     print(f"PROGRAM {i} RUNTIME: {end_time-start_time}")
+    #     print(f"==============================")
 
-        # samples, n = [], 1000
-        # for j in range(n):
-        #     sample = sample_from_joint(graph)[0]
-        #     samples.append(sample)
-
-        # print(f'\nExpectation of return values for program {i}:')
-        # if type(samples[0]) is list:
-        #     expectation = [None]*len(samples[0])
-        #     for j in range(n):
-        #         for k in range(len(expectation)):
-        #             if expectation[k] is None:
-        #                 expectation[k] = [samples[j][k]]
-        #             else:
-        #                 expectation[k].append(samples[j][k])
-        #     for k in range(len(expectation)):
-        #         print_tensor(sum(expectation[k])/n)
-        # else:
-        #     expectation = sum(samples)/n
-        #     print_tensor(expectation)
+    #     means = compute_mean(traces)
+    #     for j, mean in enumerate(means):
+    #         print(f"Posterior mean at site {j}: {mean}")
+    #     if i == 2: print(f"Posterior covariance: {compute_covariance(traces)}")
+    #     variances = compute_variance(traces)
+    #     for j, variance in enumerate(variances): 
+    #         print(f"Posterior variance at site {j}: {variance}")
+    #     plot_posterior(f'p{i}hmc', traces)
+    #     plot_sample_trace(f'p{i}hmc_sample', traces)
+    #     plot_log_joint(f'p{i}hmc_joint', joint_log_probs)

@@ -59,21 +59,21 @@ def plot_sample_trace(plotname, traces):
     dimension = len(traces[0].flatten()) if type(traces[0]) == torch.Tensor else 1
     if dimension == 1:
         plt.plot(traces)
-        plt.savefig(f'figures/hw3/{plotname}_0.png')
+        plt.savefig(f'figures/hw4/{plotname}_0.png')
         plt.clf()
     else:
         d1 = [trace[0] for trace in traces]
         d2 = [trace[1] for trace in traces]
         plt.plot(d1)
-        plt.savefig(f'figures/hw3/{plotname}_0.png')
+        plt.savefig(f'figures/hw4/{plotname}_0.png')
         plt.clf()
         plt.plot(d2)
-        plt.savefig(f'figures/hw3/{plotname}_1.png')
+        plt.savefig(f'figures/hw4/{plotname}_1.png')
         plt.clf()
 
-def plot_log_joint(plotname, joint_log_probs):
-    plt.plot(joint_log_probs)
-    plt.savefig(f'figures/hw3/{plotname}.png')
+def plot_losses(plotname, losses):
+    plt.plot(losses)
+    plt.savefig(f'figures/hw4/{plotname}.png')
     plt.clf()
 
 def plot_posterior(plotname, traces, weights=None):
@@ -89,5 +89,5 @@ def plot_posterior(plotname, traces, weights=None):
             marginal_sample = trace.unsqueeze(-1).flatten()[i]
             marginal_samples.append(marginal_sample)
         plt.hist(marginal_samples, weights=weights)
-        plt.savefig(f'figures/hw3/{plotname}_{i}.png')
+        plt.savefig(f'figures/hw4/{plotname}_{i}.png')
         plt.clf()

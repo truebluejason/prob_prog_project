@@ -1,7 +1,7 @@
-from copy import deepcopy
 import torch
+from copy import deepcopy
 from collections.abc import Iterable
-
+from distributions import *
 
 def add(a,b):
     return torch.add(a,b)
@@ -35,6 +35,8 @@ def last(data):
     return data[-1]
 def nth(data, index):
     return data[index]
+def abs(data):
+    return torch.abs(data)
 def conj(data, el):
     if len(el.shape) == 0: el = el.reshape(1)
     return torch.cat([data, el], dim=0)
@@ -77,21 +79,21 @@ def put(struct, index, value):
     result[index] = value
     return result
 def bernoulli(p, obs=None):
-    return torch.distributions.Bernoulli(p)
+    return Bernoulli(p)
 def beta(alpha, beta, obs=None):
     return torch.distributions.Beta(alpha, beta)
 def normal(mu, sigma):
-    return torch.distributions.Normal(mu, sigma)
+    return Normal(mu, sigma)
 def uniform(a, b):
-    return torch.distributions.Uniform(a, b)
+    return Uniform(a, b)
 def exponential(lamb):
     return torch.distributions.Exponential(lamb)
 def discrete(vector):
-    return torch.distributions.Categorical(vector)
+    return Categorical(vector)
 def gamma(concentration, rate):
-    return torch.distributions.gamma.Gamma(concentration, rate)
+    return Gamma(concentration, rate)
 def dirichlet(concentration):
-    return torch.distributions.dirichlet.Dirichlet(concentration)
+    return Dirichlet(concentration)
 def dirac(point):
     class Dirac:
         def __init__(self, point):
@@ -129,6 +131,7 @@ PRIMITIVES = {
     "append": conj,
     "and": compare_and,
     "or": compare_or,
+    "abs": abs,
     "conj": conj,
     "cons": cons,
     "vector": vector,
@@ -140,6 +143,7 @@ PRIMITIVES = {
     "beta": beta,
     "normal": normal,
     "uniform": uniform,
+    "uniform-continuous": uniform,
     "exponential": exponential,
     "discrete": discrete,
     "gamma": gamma,

@@ -100,7 +100,6 @@ def importance_sampling(ast, num_samples=10):
 
 
 def run_deterministic_tests():
-    
     for i in range(1,14):
         #note: this path should be with respect to the daphne path!
         ast = daphne(['desugar', '-i', '../CS532-HW2/programs/tests/deterministic/test_{}.daphne'.format(i)])
@@ -111,30 +110,21 @@ def run_deterministic_tests():
         except AssertionError:
             #raise AssertionError('return value {} is not equal to truth {} for exp {}'.format(ret,truth,ast))
             print('return value {} is not equal to truth {} for exp {}'.format(ret,truth,ast))
-        
         print('Test passed')
-        
     print('All deterministic tests passed')
-    
 
 
 def run_probabilistic_tests():
-    
     num_samples=1e4
     max_p_value = 1e-4
-    
     for i in range(1,6):
         #note: this path should be with respect to the daphne path!        
         ast = daphne(['desugar', '-i', '../CS532-HW2/programs/tests/probabilistic/test_{}.daphne'.format(i)])
         truth = load_truth('programs/tests/probabilistic/test_{}.truth'.format(i))
-        
         stream = get_stream(ast)
-        
         p_val = run_prob_test(stream, truth, num_samples)
-        
         print('p value', p_val)
         assert(p_val > max_p_value)
-    
     print('All probabilistic tests passed')    
 
 
@@ -148,7 +138,7 @@ if __name__ == '__main__':
     #run_probabilistic_tests()
     
     for i in [1,2,3,4,5]:
-        ast = daphne(['desugar', '-i', '../CS532-HW2/programs/{}.daphne'.format(i)])
+        ast = daphne(['desugar', '-i', '../CS532-HW2/programs/hw4programs/{}.daphne'.format(i)])
         start_time = time.time()
         traces, weights = importance_sampling(ast, num_samples=50000)
         end_time   = time.time()
@@ -163,27 +153,7 @@ if __name__ == '__main__':
         for j, variance in enumerate(variances): 
             print(f"Posterior variance at site {j}: {variance}")
         plot_posterior(f'p{i}is', traces, weights)
-    """
-        samples, n = [], 1000
-        for j in range(n):
-            sample = evaluate_program(ast)[0]
-            samples.append(sample)
 
-        print(f'\nExpectation of return values for program {i}:')
-        if type(samples[0]) is list:
-            expectation = [None]*len(samples[0])
-            for j in range(n):
-                for k in range(len(expectation)):
-                    if expectation[k] is None:
-                        expectation[k] = [samples[j][k]]
-                    else:
-                        expectation[k].append(samples[j][k])
-            for k in range(len(expectation)):
-                print_tensor(sum(expectation[k])/n)
-        else:
-            expectation = sum(samples)/n
-            print_tensor(expectation)
-    """
 
 """
 Plot Code
@@ -207,8 +177,8 @@ plt.savefig(f'figures/p3{plottype}.png')
 
 # 4
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,2))
-mean1 = [np.mean([s[0].flatten()[j] for s in samples]) for j in range(len(samples[0][0].flatten()))]
-var1  = [np.var([s[0].flatten()[j] for s in samples]) for j in range(len(samples[0][0].flatten()))]
+mean1 = [np.mean([s[0].flatten()[j] for s in traces]) for j in range(len(traces[0][0].flatten()))]
+var1  = [np.var([s[0].flatten()[j] for s in traces]) for j in range(len(traces[0][0].flatten()))]
 sns.heatmap(np.array(mean1).reshape(2,5),ax=ax1,annot=True,fmt="0.3f")
 sns.heatmap(np.array(var1).reshape(2,5),ax=ax2,annot=True,fmt="0.3f")
 ax1.set_title('Marginal Mean')
@@ -216,8 +186,8 @@ ax2.set_title('Marginal Variance')
 plt.tight_layout()
 plt.savefig(f'figures/p41{plottype}.png')
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,2))
-mean2 = [np.mean([s[1].flatten()[j] for s in samples]) for j in range(len(samples[0][1].flatten()))]
-var2  = [np.var([s[1].flatten()[j] for s in samples]) for j in range(len(samples[0][1].flatten()))]
+mean2 = [np.mean([s[1].flatten()[j] for s in traces]) for j in range(len(traces[0][1].flatten()))]
+var2  = [np.var([s[1].flatten()[j] for s in traces]) for j in range(len(traces[0][1].flatten()))]
 sns.heatmap(np.array(mean2).reshape(2,5),ax=ax1,annot=True,fmt="0.3f")
 sns.heatmap(np.array(var2).reshape(2,5),ax=ax2,annot=True,fmt="0.3f")
 ax1.set_title('Marginal Mean')
@@ -225,8 +195,8 @@ ax2.set_title('Marginal Variance')
 plt.tight_layout()
 plt.savefig(f'figures/p42{plottype}.png')
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16,7))
-mean3 = [np.mean([s[2].flatten()[j] for s in samples]) for j in range(len(samples[0][2].flatten()))]
-var3  = [np.var([s[2].flatten()[j] for s in samples]) for j in range(len(samples[0][2].flatten()))]
+mean3 = [np.mean([s[2].flatten()[j] for s in traces]) for j in range(len(traces[0][2].flatten()))]
+var3  = [np.var([s[2].flatten()[j] for s in traces]) for j in range(len(traces[0][2].flatten()))]
 sns.heatmap(np.array(mean3).reshape(10,10),ax=ax1,annot=True,fmt="0.3f")
 sns.heatmap(np.array(var3).reshape(10,10),ax=ax2,annot=True,fmt="0.3f")
 ax1.set_title('Marginal Mean')
@@ -234,8 +204,8 @@ ax2.set_title('Marginal Variance')
 plt.tight_layout()
 plt.savefig(f'figures/p43{plottype}.png')
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,2))
-mean4 = [np.mean([s[3].flatten()[j] for s in samples]) for j in range(len(samples[0][3].flatten()))]
-var4  = [np.var([s[3].flatten()[j] for s in samples]) for j in range(len(samples[0][3].flatten()))]
+mean4 = [np.mean([s[3].flatten()[j] for s in traces]) for j in range(len(traces[0][3].flatten()))]
+var4  = [np.var([s[3].flatten()[j] for s in traces]) for j in range(len(traces[0][3].flatten()))]
 sns.heatmap(np.array(mean4).reshape(2,5),ax=ax1,annot=True,fmt="0.3f")
 sns.heatmap(np.array(var4).reshape(2,5),ax=ax2,annot=True,fmt="0.3f")
 ax1.set_title('Marginal Mean')
